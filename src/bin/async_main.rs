@@ -5,10 +5,19 @@ use defmt::info;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::prelude::*;
-use esp_hal::gpio::{Output, Level, GpioPin};
-use esp_hal::analog::adc::{Adc, AdcPin, AdcConfig, Attenuation};
 use esp_println::println;
 use {defmt_rtt as _, esp_backtrace as _};
+use esp_hal::{
+    analog::adc::{Adc, AdcPin, AdcConfig, Attenuation},
+    clock::ClockControl,
+    dma::{Dma, DmaPriority},
+    gpio::{Event, GpioPin, Output, Input, Io, Pull},
+    peripherals::Peripherals,
+    prelude::*,
+    spi::{master::Spi, SpiMode},
+    system::SystemControl,
+    timer::timg::TimerGroup,
+};
 
 extern crate alloc;
 
@@ -53,30 +62,22 @@ async fn hall_sensor_task(
 
 #[main]
 async fn main(spawner: Spawner) {
-    let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
-    });
+    println!("Starting program!...");
 
     esp_alloc::heap_allocator!(72 * 1024);
 
-    let timer0 = esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER)
-        .split::<esp_hal::timer::systimer::Target>();
-    esp_hal_embassy::init(timer0.alarm0);
+    let peripherals = Peripherals::take();
+    let system = SystemControl::new(peripherals.SYSTEM);
+    let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
 
-    info!("Embassy initialized!");
+    let timg0 = TimerGroup::new_async(peripherals.TIMG0, &clocks);
+    esp_hal_embassy::init(&clocks, timg0);
 
-    let timer1 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    let _init = esp_wifi::init(
-        timer1.timer0,
-        esp_hal::rng::Rng::new(peripherals.RNG),
-        peripherals.RADIO_CLK,
-    )
-    .unwrap();
+    let io = Io::new(peripherals.GPIO, peripherals.IO_MUX);
 
+    let hall_sensor_pin = io.pins.gpio3;
 
-
+    /* 
     let mut led_1 = Output::new(peripherals.GPIO23, Level::Low);
     let mut led_2 = Output::new(peripherals.GPIO22, Level::Low);
     let mut led_3 = Output::new(peripherals.GPIO21, Level::Low);
@@ -88,17 +89,21 @@ async fn main(spawner: Spawner) {
     let mut led_9 = Output::new(peripherals.GPIO1, Level::Low);
     let mut led_10 = Output::new(peripherals.GPIO0, Level::Low);
 
-    // Set up ADC (using GPIO1 as example, modify as needed)
-    let analog_pin = io.pins.gpio1;
-    let mut adc1_config = AdcConfig::new();
-    let adc1_pin = adc1_config.enable_pin_with_cal::<_, AdcCal>(analog_pin, Attenuation::Attenuation11dB);
-    let adc1 = Adc::new(peripherals.ADC1, adc1_config);
+    */
+
+    let mut adc_config = AdcConfig::new();
+    let adc_pin = adc_config.enable_pin_with_cal::<_, AdcCal>(hall_sensor_pin, Attenuation::Attenuation11dB);
+    let adc = Adc::new(peripherals.ADC1, adc_config);
+
+    // Spawn the task to handle ADC readings from the Hall sensor
+    spawner.spawn(hall_sensor_task(adc, adc_pin)).unwrap();
     
     // TODO: Spawn some tasks
     let _ = spawner;
 
     loop {
-        
+
+        /* 
         led_1.set_high(); // Turn the LED on
         Timer::after(Duration::from_millis(500)).await; // Wait for 500ms
 
@@ -158,6 +163,8 @@ async fn main(spawner: Spawner) {
         
         led_10.set_low(); // Turn the LED off
         Timer::after(Duration::from_millis(500)).await; // Wait for 500ms
+
+        */
     }
 
 }
